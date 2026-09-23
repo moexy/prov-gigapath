@@ -4,6 +4,7 @@ import csv
 import hashlib
 import json
 import shutil
+import os
 import subprocess
 import sys
 import time
@@ -39,6 +40,9 @@ def sha256(path):
 
 
 def repo_revision():
+    explicit = os.environ.get("GIGAPATH_REPOSITORY_REVISION")
+    if explicit:
+        return explicit
     try:
         revision = subprocess.run(
             ["git", "rev-parse", "HEAD"],
@@ -213,6 +217,8 @@ def evaluate_slide(args, source, metadata, tile_model, slide_model, model_hashes
         "runtime": {
             "started_at": datetime.now(timezone.utc).isoformat(),
             "slurm_job_id": args.slurm_job_id,
+            "slurm_array_job_id": os.environ.get("SLURM_ARRAY_JOB_ID"),
+            "slurm_array_task_id": os.environ.get("SLURM_ARRAY_TASK_ID"),
             "device": torch.cuda.get_device_name(0),
             "torch": torch.__version__,
             "cuda": torch.version.cuda,
@@ -325,7 +331,7 @@ def main():
     args.input = args.input.resolve()
     args.output.mkdir(parents=True, exist_ok=True)
     args.scratch.mkdir(parents=True, exist_ok=True)
-    args.slurm_job_id = __import__("os").environ.get("SLURM_JOB_ID")
+    args.slurm_job_id = os.environ.get("SLURM_JOB_ID")
 
     if not torch.cuda.is_available():
         raise RuntimeError("CUDA GPU is required")

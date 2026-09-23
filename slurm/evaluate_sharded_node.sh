@@ -11,7 +11,6 @@
 #SBATCH -o /nobackup/proj/disk/muc/personal/%u/gigapath-runs/wsi-pilot-2026-09-19-f81d8f59/logs/%x-%A_%a.out
 
 set -uo pipefail
-
 [[ $# -eq 8 ]] || { echo "Usage: $0 SHARDS SIF SIF_SHA TILE TILE_SHA SLIDE SLIDE_SHA OUTPUT" >&2; exit 2; }
 SHARDS=$1
 SIF=$2
@@ -33,7 +32,7 @@ LAUNCHER=$SCRATCH/run-task.sh
 
 cleanup() { rm -rf "$SCRATCH"; }
 trap cleanup EXIT
-for path in "$SHARDS" "$SIF" "$TILE_CKPT" "$SLIDE_CKPT"; do
+for path in "$SHARDS" "$SIF" "${SIF}.manifest.json" "$TILE_CKPT" "$SLIDE_CKPT"; do
     [[ -f $path ]] || { echo "Missing required file: $path" >&2; exit 1; }
 done
 mkdir -p "$COMMON" "$OUTPUT/.incoming" "$OUTPUT/.failed"
@@ -67,6 +66,7 @@ verify_hash() {
 verify_hash "$COMMON/gigapath.sif" "$SIF_SHA" || exit 1
 verify_hash "$COMMON/pytorch_model.bin" "$TILE_SHA" || exit 1
 verify_hash "$COMMON/slide_encoder.pth" "$SLIDE_SHA" || exit 1
+IMAGE_GIT=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["git_commit"])' "${SIF}.manifest.json") || exit 1
 
 python3 - "$ROWS" "$COMMON" "$SCRATCH" <<'PY' || exit 1
 import csv, shutil, sys
@@ -90,8 +90,13 @@ output=$2
 scratch=$3
 log=$4
 common=$5
+revision=$6
 export APPTAINERENV_CUDA_VISIBLE_DEVICES="${CUDA_VISIBLE_DEVICES:?Slurm did not assign a GPU}"
 export APPTAINERENV_OMP_NUM_THREADS="${SLURM_CPUS_PER_TASK:-64}"
+export APPTAINERENV_SLURM_JOB_ID="${SLURM_JOB_ID:-}"
+export APPTAINERENV_SLURM_ARRAY_JOB_ID="${SLURM_ARRAY_JOB_ID:-}"
+export APPTAINERENV_SLURM_ARRAY_TASK_ID="${SLURM_ARRAY_TASK_ID:-}"
+export APPTAINERENV_GIGAPATH_REPOSITORY_REVISION="$revision"
 apptainer exec --nv --cleanenv \
     --bind "$source_path:$source_path:ro" \
     --bind "$common:$common:ro" \
@@ -119,6 +124,7 @@ rows=$1
 worker=$2
 scratch=$3
 common=$4
+revision=$5
 line=$(sed -n "$((SLURM_PROCID + 2))p" "$rows")
 IFS=$'\t' read -r node slot slide source weight <<< "$line"
 slot_scratch=$scratch/gpu-$slot
@@ -131,18 +137,16 @@ if [[ ! -f $source ]]; then
     echo 1 > "$status"
     exit 1
 fi
-"$worker" "$source" "$slot_output" "$slot_scratch" "$slot_log" "$common"
+"$worker" "$source" "$slot_output" "$slot_scratch" "$slot_log" "$common" "$revision"
 rc=$?
 echo "$rc" > "$status"
 exit "$rc"
 LAUNCHER
 chmod +x "$WORKER" "$LAUNCHER"
 
-# One multi-task step gives Slurm all four resource requests at once, preventing
-# independently submitted job steps from serializing on this cluster.
 srun -N1 -n"$ROW_COUNT" --cpus-per-task=64 --gpus-per-task=1 --gpu-bind=single:1 \
     --cpu-bind=none --mem=380G --kill-on-bad-exit=0 \
-    "$LAUNCHER" "$ROWS" "$WORKER" "$SCRATCH" "$COMMON" || true
+    "$LAUNCHER" "$ROWS" "$WORKER" "$SCRATCH" "$COMMON" "$IMAGE_GIT" || true
 
 record_failure() {
     local slide=$1 source=$2 slot=$3 exit_code=$4 error=$5
