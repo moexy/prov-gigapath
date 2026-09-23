@@ -1,6 +1,7 @@
 #!/bin/bash
 #SBATCH -A naiss2026-4-1499-gpu
 #SBATCH -p gpu
+#SBATCH --gpus=1
 #SBATCH -c 4
 #SBATCH --mem=16G
 #SBATCH -t 00:30:00
