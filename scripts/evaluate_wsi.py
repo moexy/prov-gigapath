@@ -11,6 +11,8 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
+from scripts.wsi_paths import WSI_SUFFIXES, slide_id_from_path
+
 import h5py
 import numpy as np
 import pandas as pd
@@ -26,8 +28,6 @@ from gigapath.pipeline import (
     run_inference_with_tile_encoder,
     tile_one_slide,
 )
-
-WSI_SUFFIXES = (".svs", ".ndpi", ".mrxs", ".tif", ".tiff")
 
 
 def sha256(path):
@@ -181,7 +181,7 @@ def tile_ome_tiff(source, scratch, level, tile_size=256):
 
 def evaluate_slide(args, source, metadata, tile_model, slide_model, model_hashes, revision):
     started = time.time()
-    slide_id = metadata.get("slide", source.stem)
+    slide_id = metadata.get("slide", slide_id_from_path(source))
     output_dir = args.output / slide_id
     qc_dir = output_dir / "qc"
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -192,7 +192,7 @@ def evaluate_slide(args, source, metadata, tile_model, slide_model, model_hashes
         "slide_id": slide_id,
         "source": str(source.resolve()),
         "source_sha256": metadata.get("sha256"),
-        "modality": metadata.get("modality", "unknown"),
+        "modality": metadata.get("modality", "brightfield"),
         "repository_revision": revision,
         "model": {
             "repository": "prov-gigapath/prov-gigapath-flash",
@@ -343,7 +343,7 @@ def main():
     for relative, metadata in receipt.items():
         if metadata.get("modality") == "fluorescence":
             rows.append({
-                "slide_id": metadata.get("slide", Path(relative).stem),
+                "slide_id": metadata.get("slide", slide_id_from_path(Path(relative))),
                 "source": str(args.input / relative),
                 "modality": "fluorescence",
                 "status": "unsupported-modality",
@@ -361,7 +361,7 @@ def main():
     for relative, metadata in receipt.items():
         if metadata.get("modality") == "brightfield" and relative not in seen:
             rows.append({
-                "slide_id": metadata.get("slide", Path(relative).stem),
+                "slide_id": metadata.get("slide", slide_id_from_path(Path(relative))),
                 "source": str(args.input / relative),
                 "modality": "brightfield",
                 "status": "failed",
