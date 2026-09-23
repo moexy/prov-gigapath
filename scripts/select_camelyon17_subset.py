@@ -84,7 +84,7 @@ def main():
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     with args.output.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=FIELDS, delimiter="\t")
+        writer = csv.DictWriter(handle, fieldnames=FIELDS, delimiter="\t", lineterminator="\n")
         writer.writeheader()
         writer.writerows(rows)
     print(f"{len(rows)} slides, {sum(int(r['size_bytes']) for r in rows) / 1e9:.1f} GB -> {args.output}")
