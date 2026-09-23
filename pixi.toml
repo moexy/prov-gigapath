@@ -1,0 +1,33 @@
+[workspace]
+name = "gigapath-flash-evaluation"
+channels = ["conda-forge"]
+platforms = [{ platform = "linux-aarch64", cuda = "13" }]
+
+[dependencies]
+python = "3.13.*"
+pytorch-gpu = "2.13.*"
+torchvision = "*"
+cuda-version = "13.*"
+flash-attn = "2.8.3.*"
+openslide = ">=4"
+openslide-python = "1.3.1.*"
+tifffile = "*"
+imagecodecs = "*"
+monai = "*"
+numpy = "*"
+pandas = "*"
+pillow = "*"
+tqdm = "*"
+h5py = "*"
+matplotlib = "*"
+scikit-image = "*"
+scikit-learn = "*"
+omegaconf = "*"
+timm = ">=1.0.3"
+
+[pypi-dependencies]
+fairscale = "*"
+huggingface-hub = "*"
+
+[tasks]
+check-gpu = "python -c \"import torch; print(torch.__version__, torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else 'no GPU')\""

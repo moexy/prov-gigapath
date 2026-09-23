@@ -137,7 +137,7 @@ def get_bounding_box(mask: np.ndarray) -> Box:
     if mask.ndim != 2:
         raise TypeError(f"Expected a 2D array but got an array with shape {mask.shape}")
 
-    slices = ndimage.find_objects(mask > 0)
+    slices = ndimage.find_objects((mask > 0).astype(np.uint8))
     if not slices:
         raise RuntimeError("The input mask is empty")
     assert len(slices) == 1
