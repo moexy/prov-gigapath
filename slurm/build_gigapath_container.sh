@@ -71,11 +71,10 @@ if [[ "${APP_ARCH}" != "aarch64" ]]; then
     echo "ERROR: Container internal architecture is not aarch64 (got ${APP_ARCH})" >&2
     exit 1
 fi
-
 for checkpoint in "${TILE_CHECKPOINT}" "${SLIDE_CHECKPOINT}"; do
     [[ -f "${checkpoint}" ]] || { echo "ERROR: Checkpoint not found: ${checkpoint}" >&2; exit 1; }
 done
-PROBE_JSON=$(apptainer exec --nv "${TMP_SIF}" python - "${TILE_CHECKPOINT}" "${SLIDE_CHECKPOINT}" <<'PY'
+PROBE_JSON=$(apptainer exec --nv --bind "${RUN_ROOT}:${RUN_ROOT}:ro" "${TMP_SIF}" python - "${TILE_CHECKPOINT}" "${SLIDE_CHECKPOINT}" <<'PY'
 import contextlib
 import json
 import subprocess
