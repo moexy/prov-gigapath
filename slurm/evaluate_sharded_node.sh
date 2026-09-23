@@ -4,8 +4,8 @@
 #SBATCH --nodes=1
 #SBATCH --gpus=4
 #SBATCH --ntasks=4
-#SBATCH --cpus-per-task=72
-#SBATCH --mem=440G
+#SBATCH --cpus-per-task=64
+#SBATCH --mem=400G
 #SBATCH -t 02:00:00
 #SBATCH -J gigapath-node
 #SBATCH -o /nobackup/proj/disk/muc/personal/%u/gigapath-runs/wsi-pilot-2026-09-19-f81d8f59/logs/%x-%A_%a.out
@@ -139,7 +139,7 @@ PY
     slot_output=$SCRATCH/output-$slot
     slot_log=$SCRATCH/worker-$slot.log
     mkdir -p "$slot_scratch" "$slot_output"
-    srun --exclusive -N1 -n1 --gpus-per-task=1 --gpu-bind=single:1 -c72 --mem=105G \
+    srun --exclusive -N1 -n1 --gpus-per-task=1 --gpu-bind=single:1 -c64 --mem=95G \
         "$WORKER" "$slot" "$source" "$slot_output" "$slot_scratch" "$slot_log" "$COMMON" &
     PIDS[$slot]=$!
     SLIDES[$slot]=$slide
