@@ -139,7 +139,7 @@ PY
     slot_output=$SCRATCH/output-$slot
     slot_log=$SCRATCH/worker-$slot.log
     mkdir -p "$slot_scratch" "$slot_output"
-    srun --exclusive -N1 -n1 --gpus-per-task=1 --gpu-bind=single:1 -c64 --mem=95G \
+    srun --exclusive -N1 -n1 --gpus-per-task=1 --gpu-bind=single:1 --cpu-bind=none -c64 --mem=95G \
         "$WORKER" "$slot" "$source" "$slot_output" "$slot_scratch" "$slot_log" "$COMMON" &
     PIDS[$slot]=$!
     SLIDES[$slot]=$slide
