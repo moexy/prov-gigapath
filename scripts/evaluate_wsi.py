@@ -3,8 +3,9 @@ import argparse
 import csv
 import hashlib
 import json
-import shutil
+import math
 import os
+import shutil
 import subprocess
 import sys
 import time
@@ -12,13 +13,12 @@ import traceback
 from datetime import datetime, timezone
 from pathlib import Path
 
-from scripts.wsi_paths import WSI_SUFFIXES, slide_id_from_path
-
 import h5py
 import numpy as np
+import openslide
 import pandas as pd
-import torch
 import tifffile
+import torch
 from PIL import Image, ImageDraw
 from tqdm import tqdm
 
@@ -30,6 +30,8 @@ from gigapath.pipeline import (
     tile_one_slide,
 )
 
+from scripts.wsi_paths import WSI_SUFFIXES, slide_id_from_path
+
 
 def sha256(path):
     digest = hashlib.sha256()
@@ -38,6 +40,24 @@ def sha256(path):
             digest.update(chunk)
     return digest.hexdigest()
 
+
+def read_native_mpp(source_path, rtol=0.05):
+    with openslide.OpenSlide(str(source_path)) as slide:
+        props = slide.properties
+        mpp_x_str = props.get(openslide.PROPERTY_NAME_MPP_X)
+        mpp_y_str = props.get(openslide.PROPERTY_NAME_MPP_Y)
+        if mpp_x_str is None or mpp_y_str is None:
+            raise ValueError(f"Missing OpenSlide MPP metadata in {source_path}")
+        try:
+            mpp_x = float(mpp_x_str)
+            mpp_y = float(mpp_y_str)
+        except (ValueError, TypeError) as err:
+            raise ValueError(f"Invalid OpenSlide MPP metadata in {source_path}: x={mpp_x_str}, y={mpp_y_str}") from err
+        if not (math.isfinite(mpp_x) and math.isfinite(mpp_y) and mpp_x > 0 and mpp_y > 0):
+            raise ValueError(f"Non-positive or non-finite OpenSlide MPP in {source_path}: x={mpp_x}, y={mpp_y}")
+        if not math.isclose(mpp_x, mpp_y, rel_tol=rtol):
+            raise ValueError(f"Materially anisotropic MPP in {source_path}: x={mpp_x}, y={mpp_y}")
+        return (mpp_x + mpp_y) / 2.0
 
 def repo_revision():
     explicit = os.environ.get("GIGAPATH_REPOSITORY_REVISION")
@@ -191,6 +211,7 @@ def evaluate_slide(args, source, metadata, tile_model, slide_model, model_hashes
     output_dir.mkdir(parents=True, exist_ok=True)
     qc_dir.mkdir(exist_ok=True)
     manifest_path = output_dir / "manifest.json"
+
     manifest = {
         "status": "running",
         "slide_id": slide_id,
@@ -207,8 +228,6 @@ def evaluate_slide(args, source, metadata, tile_model, slide_model, model_hashes
         },
         "preprocessing": {
             "level": args.level,
-            "source_mpp": args.source_mpp,
-            "effective_mpp": args.source_mpp * (2 ** args.level) if args.source_mpp else None,
             "target_mpp": args.target_mpp,
             "tile_size": 256,
             "occupancy_threshold": 0.1,
@@ -232,6 +251,16 @@ def evaluate_slide(args, source, metadata, tile_model, slide_model, model_hashes
     scratch.mkdir(parents=True)
 
     try:
+        if args.source_mpp is not None:
+            if not (math.isfinite(args.source_mpp) and args.source_mpp > 0):
+                raise ValueError(f"Explicit --source-mpp must be finite and positive, got {args.source_mpp}")
+            source_mpp = float(args.source_mpp)
+        else:
+            source_mpp = read_native_mpp(source)
+        effective_mpp = source_mpp * (2 ** args.level)
+        manifest["preprocessing"]["source_mpp"] = source_mpp
+        manifest["preprocessing"]["effective_mpp"] = effective_mpp
+
         if source.name.lower().endswith(".ome.tiff"):
             tile_ome_tiff(source, scratch, args.level)
         else:

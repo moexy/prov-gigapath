@@ -110,7 +110,6 @@ apptainer exec --nv --cleanenv \
     --slide-checkpoint "$common/slide_encoder.pth" \
     --scratch "$scratch" \
     --level 1 \
-    --source-mpp 0.243093922651934 \
     --target-mpp 0.5 \
     --batch-size 128 \
     --model-revision 685a3c816fb7bfd4fec697d7f1ed7da57f2e8e86 \
