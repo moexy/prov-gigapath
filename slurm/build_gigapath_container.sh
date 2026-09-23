@@ -18,6 +18,10 @@ RUN_ROOT="${RUN_ROOT:-/nobackup/proj/disk/muc/personal/${USER}/gigapath-runs/wsi
 TILE_CHECKPOINT="${TILE_CHECKPOINT:-${RUN_ROOT}/models/pytorch_model.bin}"
 SLIDE_CHECKPOINT="${SLIDE_CHECKPOINT:-${RUN_ROOT}/models/slide_encoder.pth}"
 
+cd "${REPO_DIR}"
+export APPTAINER_TMPDIR="${APPTAINER_TMPDIR:-/scratch/local/${SLURM_JOB_ID:-$$}/apptainer}"
+export APPTAINER_CACHEDIR="${APPTAINER_CACHEDIR:-${PROJECT_CONTAINERS_DIR}/.apptainer-cache}"
+mkdir -p "${APPTAINER_TMPDIR}" "${APPTAINER_CACHEDIR}"
 mkdir -p "${PROJECT_CONTAINERS_DIR}"
 
 if [[ ! -f "${CONTAINER_DEF}" ]]; then
