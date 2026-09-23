@@ -76,21 +76,43 @@ def load_cohort_data(results_root, key_path, level):
             skipped_count += 1
             continue
 
+        emb = None
+        tf = None
+
+        if need_slide:
+            try:
+                emb = np.load(emb_file)
+            except Exception:
+                skipped_count += 1
+                continue
+            if not (isinstance(emb, np.ndarray) and emb.shape == (384,) and np.issubdtype(emb.dtype, np.number) and np.all(np.isfinite(emb))):
+                skipped_count += 1
+                continue
+            emb = emb.astype(np.float32)
+
+        if need_tile:
+            try:
+                with h5py.File(tile_file, "r") as handle:
+                    tf = handle["features"][:]
+            except Exception:
+                skipped_count += 1
+                continue
+            if not (isinstance(tf, np.ndarray) and tf.ndim == 2 and tf.shape[0] > 0 and tf.shape[1] == 384 and np.issubdtype(tf.dtype, np.number) and np.all(np.isfinite(tf))):
+                skipped_count += 1
+                continue
+            tf = tf.astype(np.float32)
+
         loaded_slides += 1
 
         if need_slide:
-            emb = np.load(emb_file).astype(np.float32)
             slide_embeddings.append(emb)
             slide_labels.append(stain)
             slide_ids_slide_level.append(stem)
 
         if need_tile:
-            with h5py.File(tile_file, "r") as handle:
-                tf = handle["features"][:].astype(np.float32)
             tile_features.append(tf)
             tile_labels.extend([stain] * len(tf))
             tile_groups.extend([stem] * len(tf))
-
     classes = sorted(list({*slide_labels, *tile_labels}))
     if loaded_slides < 10:
         raise RuntimeError(f"Fewer than 10 slides available (loaded {loaded_slides}, need >= 10).")

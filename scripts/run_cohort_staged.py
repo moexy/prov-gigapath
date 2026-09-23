@@ -8,6 +8,7 @@ verifying, and deleting per-batch slides.
 
 import argparse
 import csv
+import json
 import subprocess
 import sys
 from pathlib import Path
@@ -70,8 +71,12 @@ def verify_slide_dir(slide_dir):
 
 def run_cmd(cmd, check=True):
     print(f"+ {' '.join(str(c) for c in cmd)}")
-    return subprocess.run(cmd, check=check, text=True, capture_output=True)
-
+    res = subprocess.run(cmd, text=True, capture_output=True)
+    if check and res.returncode != 0:
+        cmd_str = ' '.join(str(c) for c in cmd)
+        err_msg = res.stderr.strip() or res.stdout.strip() or f"exit code {res.returncode}"
+        raise RuntimeError(f"Command failed ({cmd_str}): {err_msg}")
+    return res
 
 def append_remote_results(batch_results_path, cohort_csv_path):
     """Append rows from batch results.csv to cohort results.csv."""
@@ -149,6 +154,16 @@ def demo():
 
     # Empty list
     assert plan_batches([], batch_bytes=100) == []
+
+    # 4. Failure marker detection
+    import tempfile
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        tmp_root = Path(tmp_dir)
+        marker = tmp_root / ".failed_batch.json"
+        marker.write_text(json.dumps({"input_batch_remote": "/remote/input", "slides": ["s1.tiff"]}))
+        assert marker.is_file()
+        loaded = json.loads(marker.read_text())
+        assert loaded["slides"] == ["s1.tiff"]
     print("Self-check demo() passed.")
 
 
@@ -201,6 +216,22 @@ def main():
     if args.dry_run:
         return 0
 
+    failure_marker = args.results_root / ".failed_batch.json"
+    if failure_marker.is_file():
+        try:
+            marker_data = json.loads(failure_marker.read_text())
+        except Exception:
+            marker_data = {}
+        print(
+            f"ERROR: Retained failure marker exists at {failure_marker}.\n"
+            f"Remote inputs/results from failed batch may still be present on {args.remote_host}:\n"
+            f"  input: {marker_data.get('input_batch_remote')}\n"
+            f"  results: {marker_data.get('results_batch_remote')}\n"
+            f"  slides: {marker_data.get('slides')}\n"
+            "Resolve or inspect the failed remote batch and delete this marker file before starting a new run."
+        )
+        return 1
+
     if not batches:
         print("All slides already completed successfully.")
         return 0
@@ -211,80 +242,126 @@ def main():
     input_batch_remote = f"{remote_root}/input-batch"
     results_batch_remote = f"{remote_root}/results-batch"
 
-    overall_failure = False
-
     for b_idx, batch in enumerate(batches, 1):
         b_bytes = sum(s for _, s in batch)
         print(f"\n=== Processing Batch {b_idx}/{len(batches)}: {len(batch)} slides, {b_bytes / 1e9:.2f} GB ===")
+        def record_failure(failed_slides=None, err_msg=None, returncode=None):
+            marker_payload = {
+                "batch_index": b_idx,
+                "input_batch_remote": input_batch_remote,
+                "results_batch_remote": results_batch_remote,
+                "slides": [p.name for p, _ in batch],
+                "failed_slides": failed_slides or [],
+                "sbatch_returncode": returncode,
+                "error": err_msg,
+            }
+            failure_marker.write_text(json.dumps(marker_payload, indent=2))
+            print(
+                f"Batch {b_idx} failed! Created failure marker at {failure_marker}.\n"
+                f"Preserving remote inputs and results on {remote_host}."
+            )
 
-        # 1. Clean remote input-batch and results-batch dirs
-        clean_cmd = ["ssh", *ssh_opts, remote_host, f"rm -rf '{input_batch_remote}' '{results_batch_remote}' && mkdir -p '{input_batch_remote}' '{results_batch_remote}'"]
-        run_cmd(clean_cmd)
+        try:
+            # 1. Clean remote input-batch and results-batch dirs
+            clean_cmd = ["ssh", *ssh_opts, remote_host, f"rm -rf '{input_batch_remote}' '{results_batch_remote}' && mkdir -p '{input_batch_remote}' '{results_batch_remote}'"]
+            run_cmd(clean_cmd)
 
-        # 2. rsync batch slides to remote input-batch
-        slide_paths = [str(p) for p, _ in batch]
-        rsync_ssh = f"ssh -o ControlPath={args.ssh_socket}"
-        rsync_up_cmd = ["rsync", "-av", "-e", rsync_ssh, *slide_paths, f"{remote_host}:{input_batch_remote}/"]
-        run_cmd(rsync_up_cmd)
+            # 2. rsync batch slides to remote input-batch
+            slide_paths = [str(p) for p, _ in batch]
+            rsync_ssh = f"ssh -o ControlPath={args.ssh_socket}"
+            rsync_up_cmd = ["rsync", "-av", "-e", rsync_ssh, *slide_paths, f"{remote_host}:{input_batch_remote}/"]
+            run_cmd(rsync_up_cmd)
 
-        # 3. Submit slurm/evaluate_cohort.sh with sbatch --wait
-        sbatch_cmd = [
-            "ssh", *ssh_opts, remote_host,
-            f"sbatch --wait /nobackup/proj/disk/muc/personal/$USER/gigapath/slurm/evaluate_cohort.sh '{input_batch_remote}' '{results_batch_remote}'"
-        ]
-        sbatch_res = run_cmd(sbatch_cmd, check=False)
-        if sbatch_res.returncode != 0:
-            print(f"Warning: sbatch returned {sbatch_res.returncode}; checking per-slide outputs.")
+            # 3. Submit slurm/evaluate_cohort.sh with sbatch --wait
+            sbatch_cmd = [
+                "ssh", *ssh_opts, remote_host,
+                f"sbatch --wait /nobackup/proj/disk/muc/personal/$USER/gigapath/slurm/evaluate_cohort.sh '{input_batch_remote}' '{results_batch_remote}'"
+            ]
+            sbatch_res = run_cmd(sbatch_cmd, check=False)
+            sbatch_failed = sbatch_res.returncode != 0
+            if sbatch_failed:
+                print(f"Warning: sbatch returned {sbatch_res.returncode}; checking per-slide outputs.")
+            # 4. rsync the per-slide output dirs back into local results-root.
+            #    results.csv is excluded: the cohort CSV is cumulative and merged separately.
+            rsync_down_cmd = [
+                "rsync", "-av", "--exclude", "results.csv", "-e", rsync_ssh,
+                f"{remote_host}:{results_batch_remote}/",
+                f"{args.results_root}/"
+            ]
+            rsync_down_res = run_cmd(rsync_down_cmd, check=False)
+            if rsync_down_res.returncode != 0:
+                record_failure(
+                    returncode=rsync_down_res.returncode,
+                    err_msg=f"rsync output directories failed with rc={rsync_down_res.returncode}"
+                )
+                return 1
 
-        # 4. rsync the per-slide output dirs back into local results-root.
-        #    results.csv is excluded: the cohort CSV is cumulative and merged separately.
-        rsync_down_cmd = [
-            "rsync", "-av", "--exclude", "results.csv", "-e", rsync_ssh,
-            f"{remote_host}:{results_batch_remote}/",
-            f"{args.results_root}/"
-        ]
-        run_cmd(rsync_down_cmd, check=False)
+            # 5. rsync and merge this batch's remote results.csv into the cohort results.csv
+            temp_batch_csv = args.results_root / f".batch_{b_idx}_results.csv"
+            rsync_csv_cmd = [
+                "rsync", "-av", "-e", rsync_ssh,
+                f"{remote_host}:{results_batch_remote}/results.csv",
+                str(temp_batch_csv)
+            ]
+            rsync_csv_res = run_cmd(rsync_csv_cmd, check=False)
+            if rsync_csv_res.returncode != 0:
+                record_failure(
+                    returncode=rsync_csv_res.returncode,
+                    err_msg=f"rsync results.csv failed with rc={rsync_csv_res.returncode}"
+                )
+                return 1
 
-        # 5. Merge this batch's remote results.csv into the cohort results.csv
-        temp_batch_csv = args.results_root / f".batch_{b_idx}_results.csv"
-        rsync_csv_cmd = [
-            "rsync", "-av", "-e", rsync_ssh,
-            f"{remote_host}:{results_batch_remote}/results.csv",
-            str(temp_batch_csv)
-        ]
-        run_cmd(rsync_csv_cmd, check=False)
-        if temp_batch_csv.is_file():
-            append_remote_results(temp_batch_csv, cohort_csv)
+            if not temp_batch_csv.is_file():
+                record_failure(err_msg=f"Batch results CSV {temp_batch_csv} missing after rsync")
+                return 1
+
+            try:
+                merged_rows = append_remote_results(temp_batch_csv, cohort_csv)
+            except Exception as csv_err:
+                record_failure(err_msg=f"Failed to parse or merge batch results.csv: {csv_err}")
+                return 1
+
+            # 6. Verify each expected slide dir arrived and its tile_features.h5 opens with valid shapes
+            batch_failed_slides = []
+            verified_slides_to_delete = []
+
+            for p, _ in batch:
+                slide_id = p.stem
+                if slide_id.endswith(".ome"):
+                    slide_id = slide_id[:-4]
+                slide_dir = args.results_root / slide_id
+                if verify_slide_dir(slide_dir):
+                    verified_slides_to_delete.append(p.name)
+                else:
+                    batch_failed_slides.append(slide_id)
+                    print(f"ERROR: Slide {slide_id} failed output verification!")
+
+            if sbatch_failed or batch_failed_slides:
+                record_failure(
+                    failed_slides=batch_failed_slides,
+                    returncode=sbatch_res.returncode,
+                    err_msg=f"Verification failed for {len(batch_failed_slides)} slides (sbatch_rc={sbatch_res.returncode})",
+                )
+                return 1
+
+            # 7. Delete ONLY verified slides from remote input-batch after full batch verification
+            if verified_slides_to_delete:
+                del_targets = " ".join(f"'{input_batch_remote}/{name}'" for name in verified_slides_to_delete)
+                del_cmd = ["ssh", *ssh_opts, remote_host, f"rm -f {del_targets}"]
+                run_cmd(del_cmd)
+                print(f"Verified and cleaned {len(verified_slides_to_delete)} slides on remote.")
+
+            # Unlink temporary batch CSV and remove failure marker only after full verification & cleanup
             temp_batch_csv.unlink(missing_ok=True)
+            failure_marker.unlink(missing_ok=True)
 
-        # 6. Verify each expected slide dir arrived and its tile_features.h5 opens with valid shapes
-        batch_failed_slides = []
-        verified_slides_to_delete = []
-
-        for p, _ in batch:
-            slide_id = p.stem
-            if slide_id.endswith(".ome"):
-                slide_id = slide_id[:-4]
-            slide_dir = args.results_root / slide_id
-            if verify_slide_dir(slide_dir):
-                verified_slides_to_delete.append(p.name)
-            else:
-                batch_failed_slides.append(slide_id)
-                overall_failure = True
-                print(f"ERROR: Slide {slide_id} failed output verification!")
-
-        # 7. Delete ONLY verified slides from remote input-batch
-        if verified_slides_to_delete:
-            del_targets = " ".join(f"'{input_batch_remote}/{name}'" for name in verified_slides_to_delete)
-            del_cmd = ["ssh", *ssh_opts, remote_host, f"rm -f {del_targets}"]
-            run_cmd(del_cmd)
-            print(f"Verified and cleaned {len(verified_slides_to_delete)} slides on remote.")
-
-        if batch_failed_slides:
-            print(f"Batch {b_idx} had failures: {batch_failed_slides}")
-
-    return 1 if overall_failure else 0
-
+        except Exception as exc:
+            record_failure(err_msg=f"Unexpected exception during batch execution: {exc}")
+            return 1
+        except BaseException as exc:
+            record_failure(err_msg=f"Execution interrupted: {exc}")
+            raise
+    return 0
 
 if __name__ == "__main__":
     sys.exit(main())
