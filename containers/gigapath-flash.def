@@ -15,11 +15,13 @@ From: ubuntu:24.04
     curl -fsSL https://github.com/prefix-dev/pixi/releases/download/v0.78.0/pixi-aarch64-unknown-linux-musl.tar.gz \
         | tar -xz -C /usr/local/bin pixi
     chmod +x /usr/local/bin/pixi
+    export CONDA_OVERRIDE_CUDA=13
     cd /opt/gigapath
     pixi install --locked
 
 %environment
     export LC_ALL=C.UTF-8
+    export CONDA_OVERRIDE_CUDA=13
     export LANG=C.UTF-8
     export PYTHONPATH=/opt/gigapath
     export PATH=/opt/gigapath/.pixi/envs/default/bin:$PATH
